@@ -1,0 +1,1105 @@
+---
+title: "Powdery Mildew RNA analysis bulk lines"
+author: "Paula Moolhuijzen"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#https://rstudio-pubs-static.s3.amazonaws.com/329027_593046fb6d7a427da6b2c538caf601e1.html
+```
+
+
+```{r path, echo=FALSE, message=F, warning=F}
+getwd()
+setwd(getwd())
+print(getwd())
+```
+
+
+```{r load, echo=FALSE, message=F, warning=F}
+library(DESeq2)
+library(ggplot2)
+library(genefilter)
+library(gplots)
+library(pheatmap)
+library("dplyr")
+library(pca3d)
+library(ggfortify)
+library("Hmisc")
+library(corrplot)
+require(scatterplot3d)
+library(reshape2)
+library(ggpubr)
+library("ggbeeswarm")
+library(topGO)
+library(Rgraphviz)
+library("ggpubr")
+library(stringr)
+library("ggVennDiagram")
+library(biomaRt)
+library(yarn)
+library("GSEABase")
+library(dplyr)
+```
+
+
+
+
+## Contrast and GO slims
+
+```{r, echo=FALSE}
+
+meta <- read.table("meta.txt", sep="\t", header = TRUE)
+
+mat <- read.table("matrix.txt", sep="\t", header = TRUE, row.names=1)
+
+meta$group <- factor(paste0(meta$Genotype, meta$Treatment))
+
+data <- DESeqDataSetFromMatrix(countData=mat, colData=meta, design = ~group )
+
+data$group <- relevel(data$group, ref="SControl")
+
+dds <- DESeq(data)
+norm.counts <- counts(dds, normalized=TRUE)
+norm.counts <- log10(norm.counts + 1)
+
+```
+
+### Reading in data for all wheat gene ids mapped to Gene Ontologies (GO)
+
+GO term enrichment for significantly DE genes are significant at  p-value < 0.01
+
+```{r read, echo=FALSE, message=FALSE}
+geneID2GO <- readMappings(file = "geneid2go.map", sep="\t")
+
+GO2geneID <- inverseList(geneID2GO)
+
+geneNames <- names(geneID2GO)
+
+```
+
+
+## 1. Contrast Susceptible  Inoculated versus Control
+
+```{r S}
+
+res <- results(dds, contrast=c("group", "SInoculated" , "SControl"))
+sic <- subset(res, (padj <= 0.05 & !is.na(padj)) & abs(log2FoldChange) >= 1) 
+
+```
+
+# 2. Contrast APR Inoculated versus Control 
+
+```{r S}
+
+res <- results(dds, contrast=c("group", "APRInoculated" , "APRControl"))
+aic <- subset(res, (padj <= 0.05) & abs(log2FoldChange) >= 1)
+
+```
+
+# 3. Contrast Inoculated  APR  versus S
+
+```{r S}
+
+res <- results(dds, contrast=c("group", "APRInoculated", "SInoculated"))
+ias <- subset(res, (padj <= 0.05) & abs(log2FoldChange) >= 1) 
+
+
+```
+
+# 4. Contrast Control  APR  versus S
+
+```{r S}
+
+res <- results(dds, contrast=c("group", "APRControl", "SControl"))
+cas <- subset(res, (padj <= 0.05) & abs(log2FoldChange) >= 1) 
+
+
+```
+
+### Reading in data for all wheat gene ids mapped to Gene Ontologies (GO)
+
+```{r read, echo=FALSE, message=FALSE}
+geneID2GO <- readMappings(file = "geneid2go.map", sep="\t")
+
+GO2geneID <- inverseList(geneID2GO)
+
+geneNames <- names(geneID2GO)
+
+```
+
+
+```{r, echo=FALSE, message=FALSE}
+dflist <- list("sic"=sic,"aic"=aic,"ias"=ias,"cas"=cas)
+glist <-c("MF","BP","CC")
+cnt=0
+b=0
+l <- list()
+for(e in dflist){
+  cnt=cnt+1
+  nm<- names(dflist[cnt])
+
+  deup <- factor(as.vector(row.names(subset(e, log2FoldChange >= 1))))
+  ded <- factor(as.vector(row.names(subset(e, log2FoldChange <= -1))))
+
+  geneListUP <- factor(as.integer(geneNames %in% deup))
+  names(geneListUP) <- geneNames
+  geneListD <- factor(as.integer(geneNames %in% ded))
+  names(geneListD) <- geneNames
+
+  for(go in glist){
+    b=b+1
+    sampleGOup <- new("topGOdata", ontology = go, allGenes = geneListUP,
+              geneSel = deup,
+              annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+    resultFisher <- runTest(sampleGOup, algorithm = "weight01", statistic = "fisher")
+    induced <- GenTable(sampleGOup, weightFisher = resultFisher, orderBy='weightFisher',
+                  topNodes = length(resultFisher@score), numChar = 120)
+
+    induced$weightFisher <- gsub( "< ", "", as.character(induced$weightFisher))
+    induced$weightFisher <- as.numeric(induced$weightFisher)
+    induced.p= induced[which(induced$weightFisher<=0.01),]
+
+    induced.p$reg[induced.p$weightFisher <0.01] <- "Induced"
+
+
+    sampleGOdwn <- new("topGOdata", ontology = go, allGenes = geneListD,
+              geneSel = ded,
+              annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+    resultFisher <- runTest(sampleGOdwn, algorithm = "weight01", statistic = "fisher")
+    supress <- GenTable(sampleGOdwn, weightFisher = resultFisher, orderBy='weightFisher',
+                  topNodes = length(resultFisher@score), numChar = 150)
+
+    supress$weightFisher <- gsub( "< ", "", as.character(supress$weightFisher))
+    supress$weightFisher <- as.numeric(supress$weightFisher)
+    supress.p= supress[which(supress$weightFisher<=0.01),]
+
+    supress.p$reg[supress.p$weightFisher <0.01] <- "Supressed"
+
+    new <- rbind(supress.p, induced.p)
+    #new <- new[new$Significant/new$Annotated>0.12,]
+
+    new$reg <- factor(new$reg, levels = c("Induced", "Supressed"),
+                          labels = c("Induced", "Supressed"))
+
+    new$godomain <- go
+    new$godomain <- factor(new$godomain,  levels = c(go),
+                    labels = c(go))
+    
+    new$genotype <- nm
+    
+    ngo <- paste(nm,"_result_",go,sep="")
+    
+    #write.table(new, file=paste(ngo, "-go.txt", sep=""), sep="\t", col.names=TRUE, row.names=TRUE)
+    
+    new$Term = str_wrap(new$Term, width = 50)
+
+    
+    l[[b]] <-new
+    
+  }
+    
+}
+
+```
+
+
+## DE during inoculation Susceptible and APR
+
+Molecular function
+
+```{r, echo=FALSE, message=FALSE, fig.width=10, fig.height=10}
+
+inoc <-rbind(l[[1]],  l[[4]])
+
+inoc$reg <- factor(inoc$reg, levels = c("Induced", "Supressed"),
+                          labels = c("Induced", "Supressed"))
+
+inoc$genotype <- factor(inoc$genotype, levels = c("sic", "aic"),
+                          labels = c("Susceptible", "APR"))
+
+inoc$godomain <- factor(inoc$godomain, levels = "MF",
+                          labels = "Molecular function")
+
+inoc <- subset(inoc, weightFisher <= 0.01)
+inoc <- subset(inoc, Term != "molecular function")
+inoc$Term = str_wrap(inoc$Term, width = 80)
+inocplot <-ggplot(data=inoc, aes(y=(Significant/Annotated), x=Term, color=reg, fill=reg)) + 
+  geom_bar(stat="identity", position="dodge") + 
+  geom_text(aes(label=as.character(weightFisher)), size = 1.8, hjust=0, angle=0, color="black") +
+  theme(legend.position="right", axis.text.x = element_text(angle = 0, hjust = 0),
+                                    axis.text.y = element_text(angle = 0),
+                                    axis.text=element_text(size=5)) + 
+  xlab("Gene ontology name") + ylab("GO term enrichment \n DE gene / Total") +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 40)) +
+  facet_wrap(inoc$genotype~inoc$godomain, labeller = label_wrap_gen(multi_line=FALSE), 
+             scales="fixed", nrow=1) + coord_flip()
+
+inocplot
+
+```
+
+
+```{r, echo=FALSE, message=FALSE, fig.width=10, fig.height=12}
+inocplot <-ggplot(data=inoc, aes(y=-log(weightFisher), x=Term, color=reg, fill=reg)) + 
+  geom_bar(stat="identity", position="dodge") + 
+  geom_text(aes(label=as.character(weightFisher)), size = 1.8, hjust=0, angle=0, color="black") +
+  theme(legend.position="right", axis.text.x = element_text(angle = 0, hjust = 0),
+                                    axis.text.y = element_text(angle = 0),
+                                    axis.text=element_text(size=8)) + 
+  xlab("Gene ontology name") + ylab("GO term enrichment \n -log(weightFisher)") +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 30)) +
+  facet_wrap(inoc$genotype~inoc$godomain, labeller = label_wrap_gen(multi_line=FALSE), 
+             scales="fixed", nrow=1) + coord_flip()
+
+inocplot
+```
+
+Biological process
+
+```{r, echo=FALSE, message=FALSE, fig.width=10, fig.height=10}
+
+inoc <-rbind(l[[2]],  l[[5]])
+
+inoc$reg <- factor(inoc$reg, levels = c("Induced", "Supressed"),
+                          labels = c("Induced", "Supressed"))
+
+inoc$genotype <- factor(inoc$genotype, levels = c("sic", "aic"),
+                          labels = c("Susceptible", "APR"))
+
+inoc$godomain <- factor(inoc$godomain, levels = "BP",
+                          labels = "Biological process")
+
+inoc <- subset(inoc, weightFisher <= 0.01)
+inoc <- subset(inoc, Term != "molecular function")
+inoc$Term = str_wrap(inoc$Term, width = 80)
+inocplot <-ggplot(data=inoc, aes(y=(Significant/Annotated), x=Term, color=reg, fill=reg)) + 
+  geom_bar(stat="identity", position="dodge") + 
+  geom_text(aes(label=as.character(weightFisher)), size = 1.8, hjust=0, angle=0, color="black") +
+  theme(legend.position="right", axis.text.x = element_text(angle = 0, hjust = 0),
+                                    axis.text.y = element_text(angle = 0),
+                                    axis.text=element_text(size=5)) + 
+  xlab("Gene ontology name") + ylab("GO term enrichment \n DE gene / Total") +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 40)) +
+  facet_wrap(inoc$genotype~inoc$godomain, labeller = label_wrap_gen(multi_line=FALSE), 
+             scales="fixed", nrow=1) + coord_flip()
+
+inocplot
+
+```
+
+
+```{r, echo=FALSE, message=FALSE, fig.width=10, fig.height=12}
+inocplot <-ggplot(data=inoc, aes(y=-log(weightFisher), x=Term, color=reg, fill=reg)) + 
+  geom_bar(stat="identity", position="dodge") + 
+  geom_text(aes(label=as.character(weightFisher)), size = 1.8, hjust=0, angle=0, color="black") +
+  theme(legend.position="right", axis.text.x = element_text(angle = 0, hjust = 0),
+                                    axis.text.y = element_text(angle = 0),
+                                    axis.text=element_text(size=8)) + 
+  xlab("Gene ontology name") + ylab("GO term enrichment \n -log(weightFisher)") +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 30)) +
+  facet_wrap(inoc$genotype~inoc$godomain, labeller = label_wrap_gen(multi_line=FALSE), 
+             scales="fixed", nrow=1) + coord_flip()
+
+inocplot
+```
+
+Cellular component
+```{r, echo=FALSE, message=FALSE, fig.width=12, fig.height=3}
+
+inoc <-rbind(l[[3]], l[[6]])
+
+inoc$reg <- factor(inoc$reg, levels = c("Induced", "Supressed"),
+                          labels = c("Induced", "Supressed"))
+
+inoc$genotype <- factor(inoc$genotype, levels = c("sic", "aic"),
+                          labels = c("Susceptible", "APR"))
+
+inoc$godomain <- factor(inoc$godomain, levels = "CC",
+                          labels = "Cellular component")
+
+inoc <- subset(inoc, weightFisher <= 0.01)
+#inoc <- subset(inoc, Term != "biological process")
+inoc$Term = str_wrap(inoc$Term, width = 80)
+inocplot <-ggplot(data=inoc, aes(y=(Significant/Annotated), x=Term, color=reg, fill=reg)) + 
+  geom_bar(stat="identity", position="dodge") + 
+  geom_text(aes(label=as.character(weightFisher)), size = 1.8, hjust=0, angle=0, color="black") +
+  theme(legend.position="right", axis.text.x = element_text(angle = 0, hjust = 0),
+                                    axis.text.y = element_text(angle = 0),
+                                    axis.text=element_text(size=8)) + 
+  xlab("Gene ontology name") + ylab("GO term enrichment \n DE gene / Total") +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 30)) +
+  facet_wrap(inoc$genotype~inoc$godomain, labeller = label_wrap_gen(multi_line=FALSE), 
+             scales="fixed", nrow=1) + coord_flip()
+
+inocplot
+
+```
+
+
+```{r, echo=FALSE, message=FALSE, fig.width=12, fig.height=3}
+inocplot <-ggplot(data=inoc, aes(y=-log(weightFisher), x=Term, color=reg, fill=reg)) + 
+  geom_bar(stat="identity", position="dodge") + 
+  geom_text(aes(label=as.character(weightFisher)), size = 1.8, hjust=0, angle=0, color="black") +
+  theme(legend.position="right", axis.text.x = element_text(angle = 0, hjust = 0),
+                                    axis.text.y = element_text(angle = 0),
+                                    axis.text=element_text(size=8)) + 
+  xlab("Gene ontology name") + ylab("GO term enrichment \n -log(weightFisher)") +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 30)) +
+  facet_wrap(inoc$genotype~inoc$godomain, labeller = label_wrap_gen(multi_line=FALSE), 
+             scales="fixed", nrow=1) + coord_flip()
+
+inocplot
+```
+
+
+## GO biomaRt
+
+```{r}
+library(biomaRt)
+library(stringr)
+```
+
+```{r}
+mart <- useMart("plants_mart", host = "plants.ensembl.org")
+listEnsembl(mart)
+```
+
+```{r}
+
+tail(listDatasets(useMart("plants_mart", host = "plants.ensembl.org")), 10)
+```
+
+```{r}
+searchDatasets(mart = mart, pattern = "Hordeum")
+```
+
+```{r }
+head(listAttributes(useMart("plants_mart", dataset="hvulgare_eg_gene", host = "plants.ensembl.org")), 40)
+
+hmart=useDataset("hvulgare_eg_gene", mart = mart)
+```
+
+```{r}
+#ensembl_gene_id
+head(searchAttributes(mart=mart, pattern="go"))
+```
+
+```{r}
+# For normal go analysis
+#Get all gene ids and go ids
+
+geneid2go.map <- getBM(attributes = c("ensembl_gene_id","go_id"), 
+                     mart = hmart)
+
+#write.table(geneid2go.map,file = "geneid2go.map", sep = "\t")
+length(geneid2go.map[["go_id"]])
+head(geneid2go.map)
+```
+
+```{r, echo=FALSE}
+# For normal go analysis
+
+#Remove blank entries
+geneid2go.map <- geneid2go.map[geneid2go.map$go_id != '',]
+# convert from table format to list format
+geneID2GO <- by(geneid2go.map$go_id,
+            geneid2go.map$ensembl_gene_id,
+            function(x) as.character(x))
+
+```
+
+```{r, echo=FALSE}
+# For normal go analysis
+
+GO2geneID <- inverseList(geneID2GO)
+
+geneNames <- names(geneID2GO)
+
+#geneListUP <- factor(as.integer(geneNames %in% gup))
+#names(geneListUP) <- geneNames
+
+#geneListD <- factor(as.integer(geneNames %in% gdown))
+#names(geneListD) <- geneNames
+
+#geneList <- factor(as.integer(geneNames %in% siggene))
+#names(geneList) <- geneNames
+```
+
+## GO Slim
+
+```{r}
+fl <- system.file("extdata", "goslim_plant.obo", package="GSEABase")
+slim <- getOBOCollection(fl)
+```
+
+
+```{r}
+
+#dflist <- list("sic"=sic,"aic"=aic,"ias"=ias,"cas"=cas)
+
+
+glist <- c("MF","BP", "CC")
+
+cnt=0
+b=0
+ll <- list()
+for(e in dflist){
+  
+  cnt=cnt+1
+  up <- rownames(subset(e, e$log2FoldChange >= 1)) 
+  dn <- rownames(subset(e, e$log2FoldChange <= -1)) 
+  
+  nm<- names(dflist[cnt])
+  #reg <- unique(e$reg)
+  
+  #gl <-rownames(e)
+  
+  tmp.up <- getBM(attributes = c("ensembl_gene_id","go_id"), 
+                     filters="ensembl_gene_id", values=up, mart = hmart)
+  
+  tmp.dn <- getBM(attributes = c("ensembl_gene_id","go_id"), 
+                     filters="ensembl_gene_id", values=dn, mart = hmart)
+  
+  #Remove blank entries
+  #gup.go <- gup.go[gup.go$go_id != '',]
+
+  tmpgo.up <- tmp.up$go_id
+  tmpgo.dn <- tmp.dn$go_id
+  
+  myCollection.up <- GOCollection(tmpgo.up)
+  myCollection.dn <- GOCollection(tmpgo.dn)
+
+  for(f in glist){
+    b=b+1
+    tmp.slim.up <- goSlim(myCollection.up, slim, f)
+    tmp.slim.dn <- goSlim(myCollection.dn, slim, f)
+
+    tmp.slim.up <- subset(tmp.slim.up, Count > 0)
+    tmp.slim.dn <- subset(tmp.slim.dn, Count > 0)
+    
+    tmp.slim.up$regulation <- "induced"
+    tmp.slim.dn$regulation <- "supressed"
+    
+    tmp.slim <- rbind(tmp.slim.up, tmp.slim.dn)
+    tmp.slim$genotype <- nm
+    tmp.slim$godomain <- f
+    
+    ll[[b]] <-tmp.slim
+    
+  }
+  
+}
+
+```
+
+
+### Go Slims All MF BP CC
+
+```{r, echo=FALSE, fig.width=14, fig.height=14}
+
+ctrl <-rbind(ll[[1]], ll[[2]], ll[[3]], ll[[4]], ll[[5]], ll[[6]])
+
+ctrl$godomain <- factor(ctrl$godomain, levels = c("BP","MF","CC"),
+                        labels = c("Biological process","Molecular function", "Cellular component"))
+
+ctrl$genotype <- factor(ctrl$genotype, levels = c("sic","aic"),
+                        labels = c("Susceptible","Resistant"))
+
+ctrl$regulation <- factor(ctrl$regulation, levels = c("induced","supressed"))
+
+ctrl <- subset(ctrl, Term != "molecular_function")
+ctrl <- subset(ctrl, Term != "biological_process")
+
+#ggplot(ctrl, aes(x = Count, y = Term, label="Gene Ontology")) +
+# geom_bar(stat="identity")
+
+newplot <-ggplot(data=ctrl, aes(y=Count, x=Term, color=regulation, fill=regulation)) + 
+  geom_bar(stat="identity", position="dodge") + 
+  geom_text(aes(label=as.character(Count)), size = 1.8, hjust=0, angle=0, color="black") +
+  theme(legend.position="right", axis.text.x = element_text(angle = 0, hjust = 0),
+                                    axis.text.y = element_text(angle = 0, size=8),
+                                    axis.text=element_text(size=6)) + 
+  xlab("Gene ontology name") + ylab("GO slim term count") +
+  scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 30)) +
+  facet_wrap(ctrl$godomain~ctrl$genotype, labeller = label_wrap_gen(multi_line=FALSE), 
+             scales="fixed", nrow=1) + coord_flip()
+
+newplot
+
+```
+
+
+```{r,echo=FALSE}
+
+pdf(file="goslim-all.pdf", width=14, height=12)
+
+newplot
+
+dev.off()
+
+```
+
+```{r }
+listAttributes(useMart("plants_mart", dataset="hvulgare_eg_gene", host = "plants.ensembl.org"))
+```
+
+```{r}
+unipathway.map <- getBM(attributes = c("ensembl_gene_id","unipathway"), 
+                     mart = hmart)
+
+kegg.map <- getBM(attributes = c("ensembl_gene_id","kegg_enzyme"), 
+                     mart = hmart)
+
+sic.de.up <- rownames(subset(sic, sic$log2FoldChange >= 1)) 
+sic.de.dn <- rownames(subset(sic, sic$log2FoldChange <= -1)) 
+
+de.kegg.up <- getBM(attributes = c("ensembl_gene_id","kegg_enzyme"), 
+                     filters = "ensembl_gene_id", values = sic.de.up, mart = hmart)
+
+de.kegg.dn <- getBM(attributes = c("ensembl_gene_id","kegg_enzyme"), 
+                     filters = "ensembl_gene_id", values = sic.de.dn, mart = hmart)
+
+de.kegg.up$color <- "red"
+de.kegg.dn$color <- "blue"
+
+de.kegg <- rbind(de.kegg.up, de.kegg.dn)
+#Remove blank entries
+de.kegg <- de.kegg[de.kegg$kegg_enzyme != '',]
+
+tmp <- de.kegg[,c(2, 3)]
+
+write.table(tmp, file="susceptible-kegg.txt", sep="\t")
+
+head(searchAttributes(mart=mart, pattern="kegg"))
+```
+
+
+```{r}
+
+
+aic.de.up <- rownames(subset(aic, sic$log2FoldChange >= 1)) 
+aic.de.dn <- rownames(subset(aic, sic$log2FoldChange <= -1)) 
+
+de.kegg.up <- getBM(attributes = c("ensembl_gene_id","kegg_enzyme"), 
+                     filters = "ensembl_gene_id", values = aic.de.up, mart = hmart)
+
+de.kegg.dn <- getBM(attributes = c("ensembl_gene_id","kegg_enzyme"), 
+                     filters = "ensembl_gene_id", values = aic.de.dn, mart = hmart)
+
+de.kegg.up$color <- "red"
+de.kegg.dn$color <- "blue"
+
+de.kegg <- rbind(de.kegg.up, de.kegg.dn)
+#Remove blank entries
+de.kegg <- de.kegg[de.kegg$kegg_enzyme != '',]
+
+tmp <- de.kegg[,c(2, 3)]
+
+write.table(tmp, file="adultplant-resistance-kegg.txt", sep="\t")
+
+#head(searchAttributes(mart=mart, pattern="kegg"))
+```
+
+```{r}
+
+library(pathfindR)
+
+get_pin_file(source = "BioGRID", org = "Arabidopsis_thaliana_Columbia", path2pin="/Users/266063e/Work/r_notebook", release = "4.3.196")
+
+gsets_list <- get_gene_sets_list(source = "KEGG",
+                                 org_code = "ath")
+```
+
+```{r}
+ath_kegg_genes <- gsets_list$gene_sets
+ath_kegg_descriptions <- gsets_list$descriptions
+
+## Save both as RDS files for later use
+saveRDS(ath_kegg_genes, "ath_kegg_genes.RDS")
+saveRDS(ath_kegg_descriptions, "ath_kegg_descriptions.RDS")
+
+```
+
+
+```{r}
+
+## Downloading the STRING PIN file to tempdir
+
+url <- "https://stringdb-static.org/download/protein.links.v11.0/3702.protein.links.v11.0.txt.gz"
+path2file <- file.path("/Users/266063e/Work", "STRING.txt.gz")
+download.file(url, path2file)
+
+## read STRING pin file
+ath_string_df <- read.table(path2file, header = TRUE)
+#head(gma_string_df)
+## filter using combined_score cut-off value of 800
+ath_string_df <- ath_string_df[ath_string_df$combined_score >= 800, ]
+
+## fix ids
+#ath_string_pin <- data.frame(Interactor_A = sub("^3702\\.", "", ath_string_df$protein1),
+#                             Interactor_B = sub("^3702\\.", "", ath_string_df$protein2))
+
+ath_string_pin <- data.frame(Interactor_A =  ath_string_df$protein1,
+                             Interactor_B = ath_string_df$protein2)
+
+tail(ath_string_pin, 2)
+
+```
+
+
+
+```{r}
+
+mart <- useMart("plants_mart", host = "plants.ensembl.org")
+#gma_ensembl <- useMart(mart, dataset = "gmax_gene_ensembl")
+searchDatasets(mart, pattern = "halian")
+
+ath_ensembl <- useMart("plants_mart", dataset="athaliana_eg_gene", host = "plants.ensembl.org")
+
+searchAttributes(mart=ath_ensembl, pattern="gene")
+searchAttributes(mart=ath_ensembl)
+
+converted <- getBM(attributes = c("string", "tair_symbol"),
+                   filters = "string",
+                   values = unique(unlist(ath_string_pin)),
+                   mart = ath_ensembl)
+
+
+ath_string_pin$Interactor_B <- converted$tair_symbol[match(ath_string_pin$Interactor_B, converted$string)]
+ath_string_pin <- ath_string_pin[!is.na(ath_string_pin$Interactor_A) & !is.na(ath_string_pin$Interactor_B), ]
+ath_string_pin <- ath_string_pin[ath_string_pin$Interactor_A != "" & ath_string_pin$Interactor_B != "", ]
+
+head(ath_string_pin, 2)
+
+```
+```{r}
+
+# remove self interactions
+self_intr_cond <- ath_string_pin$Interactor_A == ath_string_pin$Interactor_B
+ath_string_pin <- ath_string_pin[!self_intr_cond, ]
+
+# remove duplicated interactions (including symmetric ones)
+ath_string_pin <- unique(t(apply(ath_string_pin, 1, sort))) # this will return a matrix object
+
+ath_string_pin <- data.frame(A = ath_string_pin[, 1],
+                             pp = "pp",
+                             B = ath_string_pin[, 2])
+
+```
+
+
+```{r}
+path2SIF <- file.path(tempdir(), "athalianaPIN.sif")
+write.table(ath_string_pin,
+            file = path2SIF,
+            col.names = FALSE,
+            row.names = FALSE,
+            sep = "\t",
+            quote = FALSE)
+path2SIF <- normalizePath(path2SIF)
+
+```
+
+```{r}
+
+##Expression data
+#athaliana_eg_homolog_ensembl_gene
+sus_hor <- getBM(attributes = c("ensembl_gene_id", "athaliana_eg_homolog_ensembl_gene"),
+                   filters = "ensembl_gene_id",
+                   values = unique(rownames(sic)),
+                   mart = hmart)
+
+sus_hor <- sus_hor[sus_hor$athaliana_eg_homolog_ensembl_gene != '',]
+sus_hor$logFC <- sic$log2FoldChange[match(sus_hor$ensembl_gene_id, rownames(sic))]
+sus_hor$FDR <- sic$padj[match(sus_hor$ensembl_gene_id, rownames(sic))]
+
+sus_ath <- getBM(attributes = c("ensembl_gene_id", "tair_symbol"),
+                   filters = "ensembl_gene_id",
+                   values = unique(sus_hor$athaliana_eg_homolog_ensembl_gene),
+                   mart = ath_ensembl)
+
+sus_ath <- sus_ath[sus_ath$tair_symbol != '',]
+colnames(sus_ath)[2] <- "Gene_Symbol"
+
+sus_ath$HOR <- sus_hor$ensembl_gene_id[match(sus_ath$ensembl_gene_id, sus_hor$athaliana_eg_homolog_ensembl_gene)]
+sus_ath$logFC <- sus_hor$logFC[match(sus_ath$ensembl_gene_id, sus_hor$athaliana_eg_homolog_ensembl_gene)]
+sus_ath$FDR <- sus_hor$FDR[match(sus_ath$ensembl_gene_id, sus_hor$athaliana_eg_homolog_ensembl_gene)]
+
+sus_ath1 <- sus_ath[,c(2,4,5)]
+#colnames(sus_ath1)[1] <- "Gene_Symbol"
+
+```
+
+
+```{r, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+#pdf(file="susceptible-rpath.pdf")
+
+sus_output <- run_pathfindR(input = sus_ath1,
+                                convert2alias = FALSE,
+                                gene_sets = "Custom",
+                                custom_genes = ath_kegg_genes,
+                                custom_descriptions = ath_kegg_descriptions,
+                                pin_name_path = path2SIF)
+
+
+#dev.off()
+```
+
+```{r}
+
+#knitr::kable(sus_output)
+write.table(sus_output, file="susceptible-rpath.txt", sep="\t")
+```
+
+```{r}
+
+sus_clustered <- cluster_enriched_terms(sus_output)
+sus_clustered_chart <- enrichment_chart(sus_clustered, plot_by_cluster = TRUE)
+
+#pdf(file="susceptible-rpath-clus.pdf")
+sus_clustered_chart
+
+#dev.off()
+
+```
+
+
+```{r}
+
+sus_clusteredf <- cluster_enriched_terms(sus_output, method="fuzzy")
+sus_clustered_fchart <- enrichment_chart(sus_clustered, plot_by_cluster = TRUE)
+
+#pdf(file="susceptible-rpath-clusf.pdf")
+
+sus_clustered_fchart
+
+#dev.off()
+```
+```{r, fig.width=18, fig.height=10}
+
+pdf(file="sus-term-gene-graph.pdf", width = 22, height = 10)
+term_gene_graph(result_df = sus_output, use_description = TRUE)
+
+dev.off()
+```
+
+Working on this chunk
+```{r}
+#https://www.biostars.org/p/322415/#google_vignette
+
+m <- as.matrix(t(apply(log2(norm.counts +1), 1, function(row) c(mean(row[0:15]), mean(row[16:30]), mean(row[31:50]), mean(row[51:70])))),  rownames.force = TRUE)
+
+colnames(m)  <- c("APR.Inoc","APR.Ctrl","S.Inoc","S.Ctrl")
+
+sus_assay  <- as.matrix(m[ rownames(m) %in% sus_hor$ensembl_gene_id, ],  rownames.force = TRUE)
+
+tmp <- as.data.frame(cbind(sus_assay, sus_ath[, "Gene_Symbol"][match(rownames(sus_assay), sus_ath$HOR)]))
+
+colnames(tmp)[5] <- "Gene_Symbol" 
+
+df <- subset(tmp, !is.na(tmp[,"Gene_Symbol"]))
+
+df <- df[!duplicated(df$Gene_Symbol),]
+
+#write.table(df, file="df.txt", sep="\t", row.names = TRUE, col.names = TRUE,)
+
+rownames(df) <- df[,5]
+df <- df[,1:4] 
+df <- data.frame(df, stringsAsFactors=FALSE)
+
+df <- mutate_all(df, function(x) as.numeric(as.character(x)))
+
+sus_matrix <- data.matrix(df, rownames.force = TRUE)
+#write.table(sus_matrix, file="sus_matrix", sep="\t", row.names = TRUE, col.names = TRUE,)
+
+#test <- data.matrix(read.table(file="sus_matrix", header= TRUE, sep="\t", row.names = 1, stringsAsFactors = FALSE),  rownames.force = TRUE)
+
+
+#cases <- c("APR.Inoc", "APR.Ctrl", "S.Inoc", "S.Ctrl")
+
+score_matrix <- score_terms(enrichment_table = sus_clustered[sus_clustered$Status == "Representative", ],
+                            exp_mat = sus_matrix,
+                            cases = NULL,
+                            use_description = TRUE, # default FALSE
+                            label_samples = TRUE) # default = TRUE
+
+
+```
+
+```{r}
+pdf(file="susceptible-score-matrix.pdf", width = 10, height = 10)
+
+score_matrix <- score_terms(enrichment_table = sus_clustered[sus_clustered$Status == "Representative", ],
+                            exp_mat = sus_matrix,
+                            cases = NULL,
+                            use_description = TRUE, # default FALSE
+                            label_samples = TRUE) # default = TRUE
+
+
+
+dev.off()
+
+```
+
+```{r}
+pdf(file="susceptible-all-score-matrix.pdf", width = 10, height = 10)
+
+score_matrix <- score_terms(enrichment_table = sus_clustered,
+                            exp_mat = sus_matrix,
+                            cases = NULL,
+                            use_description = TRUE, # default FALSE
+                            label_samples = TRUE) # default = TRUE
+
+
+
+dev.off()
+
+```
+
+```{r}
+
+score_matrix <- score_terms(enrichment_table = sus_clustered[sus_clustered$Term_Description == "Plant-pathogen interaction", ],
+                            exp_mat = sus_matrix,
+                            cases = NULL,
+                            use_description = TRUE, # default FALSE
+                            label_samples = TRUE) # default = TRUE
+
+```
+
+
+
+
+Resistant - term enrichment
+```{r, echo=FALSE}
+
+res_hor <- getBM(attributes = c("ensembl_gene_id", "athaliana_eg_homolog_ensembl_gene"),
+                   filters = "ensembl_gene_id",
+                   values = unique(rownames(aic)),
+                   mart = hmart)
+
+res_hor <- res_hor[res_hor$athaliana_eg_homolog_ensembl_gene != '',]
+res_hor$logFC <- aic$log2FoldChange[match(res_hor$ensembl_gene_id, rownames(aic))]
+res_hor$FDR <- aic$padj[match(res_hor$ensembl_gene_id, rownames(aic))]
+
+res_ath <- getBM(attributes = c("ensembl_gene_id", "tair_symbol"),
+                   filters = "ensembl_gene_id",
+                   values = unique(res_hor$athaliana_eg_homolog_ensembl_gene),
+                   mart = ath_ensembl)
+
+res_ath <- res_ath[res_ath$tair_symbol != '',]
+
+res_ath$logFC <- res_hor$logFC[match(res_ath$ensembl_gene_id, res_hor$athaliana_eg_homolog_ensembl_gene)]
+res_ath$FDR <- res_hor$FDR[match(res_ath$ensembl_gene_id, res_hor$athaliana_eg_homolog_ensembl_gene)]
+
+res_ath1 <- res_ath[,c(2,3,4)]
+colnames(res_ath1)[1] <- "Gene_Symbol"
+
+```
+
+
+```{r, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+#pdf(file="resistant-rpath.pdf")
+
+res_output <- run_pathfindR(input = res_ath1,
+                                convert2alias = FALSE,
+                                gene_sets = "Custom",
+                                custom_genes = ath_kegg_genes,
+                                custom_descriptions = ath_kegg_descriptions,
+                                pin_name_path = path2SIF)
+
+#dev.off()
+
+```
+
+```{r}
+
+res_clustered <- cluster_enriched_terms(res_output)
+res_clustered_chart <- enrichment_chart(res_clustered, plot_by_cluster = TRUE)
+
+#pdf(file="resistant-rpath-clus.pdf")
+res_clustered_chart
+
+#dev.off()
+
+```
+
+```{r}
+
+res_clusteredf <- cluster_enriched_terms(res_output, method="fuzzy")
+res_clustered_fchart <- enrichment_chart(res_clustered, plot_by_cluster = TRUE)
+```
+
+
+```{r}
+pdf(file="resistant-rpath-clusf.pdf")
+
+res_clustered_fchart
+
+dev.off()
+```
+
+```{r}
+#knitr::kable(res_output)
+write.table(res_output, file="resistant-rpath.txt", sep="\t")
+```
+
+```{r, fig.width=26, fig.height=12}
+
+pdf(file="res-term-gene-graph.pdf", width = 26, height = 12)
+
+term_gene_graph(result_df = res_output, use_description = TRUE)
+
+dev.off()
+```
+
+```{r, fig.width=32, fig.width=16}
+
+combined_df <- combine_pathfindR_results(result_A = res_output, 
+                                         result_B = sus_output, 
+                                         plot_common = FALSE)
+```
+
+```{r, fig.width=16, fig.height=8}
+
+pdf(file="combined-pvalue.pdf", width=16, height=8)
+
+combined_results_graph(combined_df,use_description = TRUE,node_size="p_val")
+
+dev.off()
+```
+
+```{r, fig.width=28, fig.height=10}
+
+pdf(file="combined-terms-pvalue-resistant.pdf", width=30, height=10)
+
+combined_results_graph(combined_df, use_description = TRUE, selected_terms = combined_df$Term_Description[c(1,2,4,5,8)], node_size="p_val")
+
+dev.off()
+```
+
+```{r, fig.width=20, fig.height=10}
+
+pdf(file="combined-terms-pvalue-susceptible.pdf", width=22, height=10)
+
+combined_results_graph(combined_df, use_description = TRUE, selected_terms = combined_df$Term_Description[c(3,9)], node_size="p_val")
+
+dev.off()
+```
+
+Plant-pathogen interaction (ath04626), Plant hormone signal transduction (ath04075)
+```{r, fig.width=14, fig.height=8}
+combined_results_graph(combined_df, selected_terms = c("ath04626","ath04075") , node_size="p_val")
+
+```
+
+
+```{r}
+#https://www.biostars.org/p/322415/#google_vignette
+
+res_ath2 <- getBM(attributes = c("ensembl_gene_id", "tair_symbol"),
+                   filters = "ensembl_gene_id",
+                   values = unique(res_hor$athaliana_eg_homolog_ensembl_gene),
+                   mart = ath_ensembl)
+
+res_ath2 <- res_ath2[res_ath2$tair_symbol != '',]
+res_ath2$FDR <- res_hor$FDR[match(res_ath2$ensembl_gene_id, res_hor$athaliana_eg_homolog_ensembl_gene)]
+res_ath2$HOR <- res_hor$ensembl_gene_id[match(res_ath2$ensembl_gene_id, res_hor$athaliana_eg_homolog_ensembl_gene)]
+
+colnames(res_ath2)[2] <- "Gene_Symbol"
+
+write.table(res_ath2, file="res_ath2.txt", sep = "\t", col.names = TRUE)
+
+m <- as.matrix(t(apply(log2(norm.counts +1), 1, function(row) c(mean(row[0:15]), mean(row[16:30]), mean(row[31:50]), mean(row[51:70])))),  rownames.force = TRUE)
+
+colnames(m)  <- c("APR.Inoc","APR.Ctrl","S.Inoc","S.Ctrl")
+
+res_assay  <- as.matrix(m[ rownames(m) %in% res_hor$ensembl_gene_id, ],  rownames.force = TRUE)
+
+tmp <- as.data.frame(cbind(res_assay, res_ath2[, "Gene_Symbol"][match(rownames(res_assay), res_ath2$HOR)]))
+#tmp2 <- cbind(tmp, res_ath2[, "FDR"][match(rownames(tmp), res_ath2$HOR)])
+
+colnames(tmp)[5] <- "Gene_Symbol" 
+#colnames(tmp2)[73] <- "FDR"
+
+df <- subset(tmp, !is.na(tmp[,"Gene_Symbol"]))
+```
+
+
+```{r}
+
+df <- df[!duplicated(df$Gene_Symbol),]
+rownames(df) <- df[,5]
+df <- df[,1:4] 
+res_matrix <- data.frame(res_matrix, stringsAsFactors=FALSE)
+#res_matrix %>% mutate_all(as.numeric)
+
+
+df <- mutate_all(df, function(x) as.numeric(as.character(x)))
+
+res_matrix <- data.matrix(df, rownames.force = TRUE)
+#write.table(res_matrix, file="res_matrix", sep="\t", row.names = TRUE, col.names = TRUE,)
+
+#test <- data.matrix(read.table(file="res_matrix", header= TRUE, sep="\t", row.names = 1, stringsAsFactors = FALSE),  rownames.force = TRUE)
+
+
+#cases <- c("APR.Inoc", "APR.Ctrl", "S.Inoc", "S.Ctrl")
+
+score_matrix <- score_terms(enrichment_table = res_clustered[res_clustered$Status == "Representative", ],
+                            exp_mat = res_matrix,
+                            cases = NULL,
+                            use_description = TRUE, # default FALSE
+                            label_samples = TRUE) # default = TRUE
+```
+
+
+```{r}
+
+pdf(file="resistant-score-matrix.pdf", width = 10, height = 10)
+
+score_matrix <- score_terms(enrichment_table = res_clustered[res_clustered$Status == "Representative", ],
+                            exp_mat = res_matrix,
+                            cases = NULL,
+                            use_description = TRUE, # default FALSE
+                            label_samples = TRUE) # default = TRUE
+
+dev.off()
+```
+
+```{r}
+
+pdf(file="resistant-all-score-matrix.pdf", width = 10, height = 10)
+
+score_matrix <- score_terms(enrichment_table = res_clustered,
+                            exp_mat = res_matrix,
+                            cases = NULL,
+                            use_description = TRUE, # default FALSE
+                            label_samples = TRUE) # default = TRUE
+
+dev.off()
+```
+
+```{r}
+score_matrix <- score_terms(enrichment_table = res_clustered[res_clustered$Term_Description == "Plant-pathogen interaction", ],
+                            exp_mat = res_matrix,
+                            cases = NULL,
+                            use_description = TRUE, # default FALSE
+                            label_samples = TRUE) # default = TRUE
+```
+
+7H first 10Mb resistant DEGs
+```{r}
+
+genev <- c("HORVU7Hr1G002820", "HORVU7Hr1G005270", "HORVU7Hr1G005270", "HORVU7Hr1G006490", "HORVU7Hr1G007220", "HORVU7Hr1G007220", "HORVU7Hr1G008390", "HORVU7Hr1G008390", "HORVU7Hr1G009770", "HORVU7Hr1G012730")
+top  <- norm.counts[ genev, ]
+anno <- as.data.frame(colData(dds)[, c( "Genotype", "Treatment")])
+pheatmap(top, annotation_col = anno, fontsize_col = 6, fontsize_row = 6, show_rownames=T)
+```
